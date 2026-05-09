@@ -1,0 +1,11 @@
+[firm]
+name = "TopStep Trader"
+account_size = 50000
+trailing_drawdown = 2000
+daily_loss_limit = 1000
+profit_target = 3000
+min_trading_days = 10
+max_contracts = 5
+overnight_positions = false
+consistency_rule = true
+consistency_pct = 0.30

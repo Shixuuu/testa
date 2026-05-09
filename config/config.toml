@@ -1,0 +1,22 @@
+[app]
+default_data_dir = "~/data/futures"
+default_strategy = "strategies/sma_cross.py"
+hot_reload = true
+
+[ai]
+deepseek_api_key_env = "DEEPSEEK_API_KEY"
+model = "deepseek-chat"
+stream = true
+
+[firm]
+profile = "apex_50k"
+enabled = true
+
+[monte_carlo]
+n_paths = 10000
+method = "trade_shuffle"
+confidence_interval = 0.95
+seed = null
+
+[news]
+refresh_interval_seconds = 300

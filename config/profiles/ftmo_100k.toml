@@ -1,0 +1,11 @@
+[firm]
+name = "FTMO"
+account_size = 100000
+trailing_drawdown = 5000
+daily_loss_limit = 5000
+profit_target = 10000
+min_trading_days = 10
+max_contracts = 10
+overnight_positions = true
+consistency_rule = false
+consistency_pct = null

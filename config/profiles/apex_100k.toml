@@ -1,0 +1,11 @@
+[firm]
+name = "Apex Trader Funding"
+account_size = 100000
+trailing_drawdown = 3000
+daily_loss_limit = 2000
+profit_target = 6000
+min_trading_days = 5
+max_contracts = 20
+overnight_positions = false
+consistency_rule = false
+consistency_pct = null
