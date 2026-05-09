@@ -1,0 +1,20 @@
+[app]
+default_data_dir = "~/data/futures"
+default_strategy = "strategies/sma_cross.py"
+hot_reload = true
+
+[firm]
+profile = "apex_50k"
+enabled = true
+
+[monte_carlo]
+n_paths = 10000
+method = "trade_shuffle"
+confidence_interval = 0.95
+seed = 0  # 0 = random
+
+[display]
+theme = "dark"
+chart_bars_visible = 120
+show_volume = true
+show_indicators = true

@@ -1,0 +1,18 @@
+[profile]
+name = "Apex 50K"
+account_size = 50000.0
+trailing_drawdown = 2500.0
+daily_loss_limit = 1000.0
+profit_target = 3000.0
+consistency_pct = 0.0   # No consistency rule for Apex
+min_trading_days = 5
+overnight_ban = false
+weekend_ban = true
+session_close = "16:00"
+enabled_rules = [
+  "daily_loss_limit",
+  "trailing_drawdown",
+  "profit_target",
+  "min_trading_days",
+  "weekend_ban",
+]

@@ -1,0 +1,18 @@
+[profile]
+name = "Apex 100K"
+account_size = 100000.0
+trailing_drawdown = 3000.0
+daily_loss_limit = 1000.0
+profit_target = 6000.0
+consistency_pct = 0.0
+min_trading_days = 5
+overnight_ban = false
+weekend_ban = true
+session_close = "16:00"
+enabled_rules = [
+  "daily_loss_limit",
+  "trailing_drawdown",
+  "profit_target",
+  "min_trading_days",
+  "weekend_ban",
+]
