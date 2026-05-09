@@ -15,9 +15,10 @@ HOTKEYS = [
     ("Shift+F", "25× fast forward"),
     ("M", "Max speed (full backtest)"),
     ("R", "Reset replay to bar 0"),
-    ("G", "Go to bar / timestamp"),
-    ("N / B", "Next / previous trade"),
-    ("Ctrl+B", "Set / jump to bookmark"),
+    ("T", "Toggle Candlestick ↔ TPO chart"),
+    ("", ""),
+    ("\\", "Toggle AI Chat panel (DeepSeek)"),
+    ("N", "Open News & Economic Calendar"),
     ("", ""),
     ("S", "Open strategy panel"),
     ("D", "Open data manager"),
@@ -26,7 +27,6 @@ HOTKEYS = [
     ("C", "Open Monte Carlo view"),
     ("E", "Export report HTML/CSV"),
     ("I", "Toggle indicator visibility"),
-    ("1–6", "Zoom chart timeframe"),
     ("Tab", "Cycle panel focus"),
     ("?", "Show this help"),
     ("Q", "Quit"),
@@ -39,10 +39,10 @@ class HotkeyHelp(ModalScreen):
         align: center middle;
     }
     #help_container {
-        width: 60;
+        width: 66;
         height: auto;
-        border: thick $primary;
-        background: $surface;
+        border: thick #ff8c00;
+        background: #070d18;
         padding: 1 2;
     }
     """

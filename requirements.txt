@@ -8,3 +8,4 @@ tomli>=2.0.1; python_version < "3.11"
 watchdog>=3.0.0
 rich>=13.0.0
 pyarrow>=14.0.0
+httpx>=0.26.0
