@@ -1,13 +1,12 @@
-"""News fetcher — Forex Factory economic calendar + DuckDuckGo web search."""
+"""News fetcher — Forex Factory calendar + Google News RSS search."""
 from __future__ import annotations
 import asyncio
-import json
+import html as _html_mod
 import re
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import date
-from typing import Optional
 
 import httpx
 
@@ -35,39 +34,87 @@ class NewsItem:
 
 def web_search(query: str, max_results: int = 6) -> str:
     """
-    DuckDuckGo Instant Answer search — no API key required.
-    Returns formatted text suitable for the AI context.
+    Google News RSS search — free, no API key, always returns real headlines.
+    Returns formatted text suitable for display or AI context.
     """
     try:
         params = urllib.parse.urlencode({
             "q": query,
-            "format": "json",
-            "no_html": "1",
-            "skip_disambig": "1",
+            "hl": "en-US",
+            "gl": "US",
+            "ceid": "US:en",
         })
         req = urllib.request.Request(
-            f"https://api.duckduckgo.com/?{params}",
-            headers={"User-Agent": "FuturesBacktestTUI/1.0"},
+            f"https://news.google.com/rss/search?{params}",
+            headers={"User-Agent": "FuturesBacktestTUI/1.0 (news reader)"},
         )
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read().decode())
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            xml = resp.read().decode("utf-8", errors="replace")
 
-        parts: list[str] = []
-        if data.get("Abstract"):
-            parts.append(f"[{data.get('AbstractSource', 'Web')}]\n{data['Abstract']}")
-        for topic in data.get("RelatedTopics", [])[:max_results]:
-            if isinstance(topic, dict) and topic.get("Text"):
-                parts.append(topic["Text"])
-        if data.get("Answer"):
-            parts.insert(0, f"Answer: {data['Answer']}")
+        # Parse individual <item> blocks so ordering is preserved
+        item_blocks = re.findall(r"<item>(.+?)</item>", xml, re.DOTALL)
+        if not item_blocks:
+            return f"No results for: {query}"
 
-        return "\n\n".join(parts[:max_results]) if parts else f"No results for: {query}"
+        parts = []
+        for block in item_blocks[:max_results]:
+            t = re.search(r"<title>(.+?)</title>", block)
+            s = re.search(r"<source[^>]*>(.+?)</source>", block)
+            d = re.search(r"<pubDate>(.+?)</pubDate>", block)
+            if not t:
+                continue
+            title = _html_mod.unescape(t.group(1)).strip()
+            src = s.group(1).strip() if s else ""
+            dt = (d.group(1)[:16].strip() if d else "")
+            meta = " · ".join(filter(None, [src, dt]))
+            parts.append(f"{title}\n  {meta}" if meta else title)
+
+        return "\n\n".join(parts) if parts else f"No results for: {query}"
     except Exception as exc:
         return f"Search error: {exc}"
 
 
+def _rss_to_items(query: str, max_results: int = 10) -> list[NewsItem]:
+    """
+    Parse Google News RSS into NewsItem list.
+    Called in a thread pool — do not await.
+    """
+    try:
+        params = urllib.parse.urlencode({
+            "q": query, "hl": "en-US", "gl": "US", "ceid": "US:en",
+        })
+        req = urllib.request.Request(
+            f"https://news.google.com/rss/search?{params}",
+            headers={"User-Agent": "FuturesBacktestTUI/1.0 (news reader)"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            xml = resp.read().decode("utf-8", errors="replace")
+
+        item_blocks = re.findall(r"<item>(.+?)</item>", xml, re.DOTALL)
+        items: list[NewsItem] = []
+        for block in item_blocks[:max_results]:
+            t = re.search(r"<title>(.+?)</title>", block)
+            l = re.search(r"<link>(.+?)</link>", block)
+            s = re.search(r"<source[^>]*>(.+?)</source>", block)
+            d = re.search(r"<pubDate>(.+?)</pubDate>", block)
+            if not t:
+                continue
+            items.append(NewsItem(
+                title=_html_mod.unescape(t.group(1)).strip(),
+                source=s.group(1).strip() if s else "Google News",
+                url=l.group(1).strip() if l else "",
+                timestamp=d.group(1)[:16].strip() if d else "",
+            ))
+        return items
+    except Exception as exc:
+        return [NewsItem(title=f"RSS error: {exc}", source="Google News")]
+
+
 async def fetch_forex_factory_calendar() -> list[NewsItem]:
-    """Scrape the Forex Factory economic calendar for today."""
+    """
+    Scrape the Forex Factory economic calendar for today.
+    Falls back to Google News RSS if FF blocks the request.
+    """
     today_str = date.today().strftime("%b%d.%Y").lower()
     url = f"https://www.forexfactory.com/calendar?day={today_str}"
     items: list[NewsItem] = []
@@ -76,7 +123,7 @@ async def fetch_forex_factory_calendar() -> list[NewsItem]:
         async with httpx.AsyncClient(
             headers=_HEADERS,
             follow_redirects=True,
-            timeout=12.0,
+            timeout=10.0,
         ) as client:
             resp = await client.get(url)
             html = resp.text
@@ -114,43 +161,28 @@ async def fetch_forex_factory_calendar() -> list[NewsItem]:
                 impact=impact_level,
                 currency=(currencies[i].strip() if i < len(currencies) else ""),
             ))
-    except Exception as exc:
-        items.append(NewsItem(
-            title=f"FF calendar unavailable: {exc}",
-            source="Forex Factory",
-            impact="LOW",
-        ))
+    except Exception:
+        pass  # fall through to RSS fallback
+
+    # Fallback: FF blocked or returned empty HTML — use Google News RSS
+    if not items:
+        loop = asyncio.get_event_loop()
+        items = await loop.run_in_executor(
+            None, _rss_to_items, "economic calendar USD Federal Reserve today", 10
+        )
 
     return items
 
 
-async def fetch_market_headlines(topic: str = "futures markets today") -> list[NewsItem]:
-    """
-    Fetch general market/futures headlines via DuckDuckGo.
-    Runs the sync search in a thread pool to keep the event loop free.
-    """
+async def fetch_market_headlines(topic: str = "stock market futures news") -> list[NewsItem]:
+    """Fetch market headlines via Google News RSS."""
     loop = asyncio.get_event_loop()
-    raw = await loop.run_in_executor(None, web_search, topic, 8)
-
-    items: list[NewsItem] = []
-    for chunk in raw.split("\n\n"):
-        chunk = chunk.strip()
-        if not chunk:
-            continue
-        lines = chunk.splitlines()
-        title = lines[0][:100]
-        snippet = " ".join(lines[1:])[:200] if len(lines) > 1 else ""
-        items.append(NewsItem(title=title, source="DuckDuckGo", snippet=snippet))
-
-    return items
+    return await loop.run_in_executor(None, _rss_to_items, topic, 8)
 
 
 async def fetch_company_background(ticker_or_name: str) -> str:
-    """
-    Return a brief company/instrument background from DuckDuckGo.
-    Intended for the AI's web_search tool call.
-    """
+    """Return a brief company/instrument background."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
-        None, web_search, f"{ticker_or_name} company overview futures trading"
+        None, web_search, f"{ticker_or_name} company news today"
     )

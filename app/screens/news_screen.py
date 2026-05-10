@@ -4,7 +4,7 @@ import asyncio
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import ScrollableContainer, Vertical, Horizontal
+from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Static, Input, Button
 from rich.text import Text
@@ -33,12 +33,19 @@ class NewsHeadlines(Static):
     }
     """
 
-    def set_items(self, items: list[NewsItem], title: str = "HEADLINES"):
+    def set_loading(self, title: str = "LOADING") -> None:
+        text = Text()
+        text.append(f" {title} ", style=f"bold black on {_BB_ORANGE}")
+        text.append("\n\n")
+        text.append("  Fetching…", style="dim #4a6b8a")
+        self.update(text)
+
+    def set_items(self, items: list[NewsItem], title: str = "HEADLINES") -> None:
         text = Text()
         text.append(f" {title} ", style=f"bold black on {_BB_ORANGE}")
         text.append("\n\n")
         if not items:
-            text.append("Loading…", style="dim")
+            text.append("  No events found.", style="dim #4a6b8a")
         else:
             for item in items:
                 impact_style = _IMPACT_COLOR.get(item.impact, "")
@@ -55,23 +62,13 @@ class NewsHeadlines(Static):
         self.update(text)
 
 
-class SearchBar(Static):
-    DEFAULT_CSS = """
-    SearchBar {
-        height: 3;
-        border: solid #1e3a5f;
-        background: #0d1520;
-        padding: 0 1;
-    }
-    """
-
-
 class NewsScreen(Screen):
     """Full-screen news view: FF economic calendar + market headlines + search."""
 
     BINDINGS = [
-        Binding("escape,n", "dismiss", "Close"),
-        Binding("r", "refresh", "Refresh"),
+        Binding("escape", "close_screen", "Close", priority=True),
+        Binding("n",      "close_screen", "Close", priority=True),
+        Binding("r",      "refresh",      "Refresh"),
     ]
 
     CSS = """
@@ -145,7 +142,7 @@ class NewsScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Static(
             "  MARKET NEWS & ECONOMIC CALENDAR  "
-            "   [R]=Refresh  [ESC]=Close",
+            "   [R]=Refresh  [ESC/N]=Close",
             id="news_header",
         )
         with Horizontal(id="news_columns"):
@@ -159,50 +156,56 @@ class NewsScreen(Screen):
             yield Button("SEARCH", id="search_btn", variant="default")
         yield Static("Search results will appear here.", id="search_results")
         yield Static(
-            "  Forex Factory economic calendar | DuckDuckGo web search | DeepSeek AI",
+            "  Forex Factory economic calendar | DuckDuckGo web search",
             id="news_footer",
         )
 
-    def on_mount(self):
-        self.query_one("#ff_panel", NewsHeadlines).set_items([], "FOREX FACTORY — LOADING…")
-        self.query_one("#hl_panel", NewsHeadlines).set_items([], "HEADLINES — LOADING…")
+    def on_mount(self) -> None:
+        self.query_one("#ff_panel", NewsHeadlines).set_loading("FOREX FACTORY CALENDAR")
+        self.query_one("#hl_panel", NewsHeadlines).set_loading("MARKET HEADLINES")
         self.call_later(self._load_news)
 
-    async def _load_news(self):
-        ff_items, hl_items = await asyncio.gather(
-            fetch_forex_factory_calendar(),
-            fetch_market_headlines("futures markets ES NQ CL today"),
-        )
+    async def _load_news(self) -> None:
+        try:
+            ff_items, hl_items = await asyncio.gather(
+                fetch_forex_factory_calendar(),
+                fetch_market_headlines("futures stock market news today"),
+            )
+        except Exception as exc:
+            ff_items = []
+            hl_items = []
+            self.notify(f"News fetch error: {exc}", severity="error")
+
         self.query_one("#ff_panel", NewsHeadlines).set_items(ff_items, "FOREX FACTORY CALENDAR")
         self.query_one("#hl_panel", NewsHeadlines).set_items(hl_items, "MARKET HEADLINES")
         footer = self.query_one("#news_footer", Static)
         footer.update(
             f"  FF: {len(ff_items)} events  |  Headlines: {len(hl_items)}  "
-            "|  [R]=Refresh  [ESC]=Close"
+            "|  [R]=Refresh  [ESC/N]=Close"
         )
 
-    def action_refresh(self):
-        self.query_one("#ff_panel", NewsHeadlines).set_items([], "REFRESHING…")
-        self.query_one("#hl_panel", NewsHeadlines).set_items([], "REFRESHING…")
+    def action_refresh(self) -> None:
+        self.query_one("#ff_panel", NewsHeadlines).set_loading("REFRESHING…")
+        self.query_one("#hl_panel", NewsHeadlines).set_loading("REFRESHING…")
         self.call_later(self._load_news)
 
-    def action_dismiss(self):
+    def action_close_screen(self) -> None:
         self.dismiss()
 
-    async def on_button_pressed(self, event: Button.Pressed):
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "search_btn":
             await self._do_search()
 
-    async def on_input_submitted(self, event: Input.Submitted):
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "search_input":
             await self._do_search()
 
-    async def _do_search(self):
+    async def _do_search(self) -> None:
         query = self.query_one("#search_input", Input).value.strip()
         if not query:
             return
         results_widget = self.query_one("#search_results", Static)
-        results_widget.update(Text(f"Searching: {query}…", style="dim"))
+        results_widget.update(Text(f"  Searching: {query}…", style="dim"))
         loop = asyncio.get_event_loop()
         raw = await loop.run_in_executor(None, web_search, query, 8)
         text = Text()
