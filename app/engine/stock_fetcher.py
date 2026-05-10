@@ -215,6 +215,18 @@ async def fetch_options_snapshot(ticker: str, expiry_index: int = 0) -> OptionsS
 
 
 def _sync_fetch_options(ticker: str, expiry_index: int) -> OptionsSnapshot:
+    import math as _math
+
+    def _f(val) -> float:
+        try:
+            v = float(val)
+            return 0.0 if _math.isnan(v) or _math.isinf(v) else v
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _i(val) -> int:
+        return int(_f(val))
+
     empty = OptionsSnapshot(
         ticker=ticker.upper(), spot_price=0.0,
         expiries=[], calls=[], puts=[],
@@ -224,7 +236,7 @@ def _sync_fetch_options(ticker: str, expiry_index: int) -> OptionsSnapshot:
         import yfinance as yf  # type: ignore
         t = yf.Ticker(ticker)
         info = t.info or {}
-        spot = float(
+        spot = _f(
             info.get("regularMarketPrice") or info.get("currentPrice") or
             info.get("previousClose") or 0
         )
@@ -238,17 +250,20 @@ def _sync_fetch_options(ticker: str, expiry_index: int) -> OptionsSnapshot:
         def parse_df(df, expiry: str) -> list[OptionRow]:
             rows: list[OptionRow] = []
             for _, r in df.iterrows():
-                rows.append(OptionRow(
-                    strike=float(r.get("strike") or 0),
-                    expiry=expiry,
-                    last_price=float(r.get("lastPrice") or 0),
-                    bid=float(r.get("bid") or 0),
-                    ask=float(r.get("ask") or 0),
-                    volume=int(r.get("volume") or 0),
-                    open_interest=int(r.get("openInterest") or 0),
-                    implied_volatility=float(r.get("impliedVolatility") or 0),
-                    in_the_money=bool(r.get("inTheMoney", False)),
-                ))
+                try:
+                    rows.append(OptionRow(
+                        strike=_f(r.get("strike")),
+                        expiry=expiry,
+                        last_price=_f(r.get("lastPrice")),
+                        bid=_f(r.get("bid")),
+                        ask=_f(r.get("ask")),
+                        volume=_i(r.get("volume")),
+                        open_interest=_i(r.get("openInterest")),
+                        implied_volatility=_f(r.get("impliedVolatility")),
+                        in_the_money=bool(r.get("inTheMoney", False)),
+                    ))
+                except Exception:
+                    pass  # skip malformed row
             return rows
 
         calls = parse_df(chain.calls, expiries[idx])
