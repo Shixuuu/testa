@@ -9,3 +9,4 @@ watchdog>=3.0.0
 rich>=13.0.0
 pyarrow>=14.0.0
 httpx>=0.26.0
+yfinance>=0.2.40

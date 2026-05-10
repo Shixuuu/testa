@@ -177,3 +177,41 @@ class AIChatPanel(Widget):
             f"Backtest context updated:\n{summary}",
             _BB_TOOL,
         )
+
+    def inject_stock_context(self, ticker: str, context: str):
+        """Inject a full stock analysis block into the AI session history."""
+        system_note = f"[Stock data loaded for {ticker}] Full profile, options chain, and financials are now in context."
+        self._add_bubble("System", system_note, _BB_TOOL)
+        # Add context as a hidden assistant-side message so AI knows the data
+        self._history.append(ChatMessage(
+            role="user",
+            content=(
+                f"I've loaded stock data for {ticker}. Here is the full context:\n\n"
+                + context
+                + "\n\nPlease acknowledge receipt and let me know you're ready to answer questions about this stock."
+            ),
+        ))
+        # Trigger the AI to acknowledge (non-blocking)
+        self.call_later(self._acknowledge_stock_context, ticker)
+
+    async def _acknowledge_stock_context(self, ticker: str):
+        """Let the AI briefly acknowledge the stock context was loaded."""
+        if self._busy:
+            return
+        self._busy = True
+        status = self.query_one("#chat_status", Static)
+        status.update(f"Processing {ticker} context…")
+        try:
+            app_state = self._state_provider()
+            response = await chat_with_deepseek(
+                history=self._history,
+                app_state=app_state,
+                api_key=self._api_key,
+                search_fn=web_search,
+            )
+        except Exception as exc:
+            response = f"Context loaded for {ticker}. Ready for questions."
+        self._history.append(ChatMessage(role="assistant", content=response))
+        self._add_bubble("DeepSeek", response, _BB_ASSISTANT)
+        status.update(f"Ready  ({len(self._history)//2} exchanges)")
+        self._busy = False

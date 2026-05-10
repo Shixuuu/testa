@@ -19,6 +19,7 @@ HOTKEYS = [
     ("", ""),
     ("\\", "Toggle AI Chat panel (DeepSeek)"),
     ("N", "Open News & Economic Calendar"),
+    ("K", "Open Stock Lookup (yfinance + Options + AI Supply Chain)"),
     ("", ""),
     ("S", "Open strategy panel"),
     ("D", "Open data manager"),

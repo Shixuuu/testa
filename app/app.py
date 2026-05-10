@@ -48,6 +48,7 @@ from .screens.prop_firm_config import PropFirmConfig, PropProfileSelected
 from .screens.monte_carlo_view import MonteCarloView
 from .screens.analytics_report import AnalyticsReportScreen
 from .screens.news_screen import NewsScreen
+from .screens.stock_screen import StockScreen, SendToAIChat
 
 FIRM_PROFILES_DIR = Path(__file__).parent.parent / "firm_profiles"
 DEMO_DATA = Path(__file__).parent.parent / "data" / "demo" / "es_demo_5m.csv"
@@ -170,6 +171,7 @@ class FuturesBacktestTUI(App):
         Binding("t", "toggle_chart", "Candle/TPO"),
         Binding("backslash", "toggle_ai", "AI Chat"),
         Binding("n", "open_news", "News"),
+        Binding("k", "open_stock", "Stock Lookup"),
         Binding("s", "open_strategy", "Strategy"),
         Binding("d", "open_data", "Data"),
         Binding("p", "open_prop", "Prop Firm"),
@@ -241,7 +243,7 @@ class FuturesBacktestTUI(App):
         status = self.query_one("#status_bar", StatusBar)
         status.firm_name = self._prop_profile.name if self._prop_profile else "—"
         status.message = (
-            "D=Data  S=Strategy  Space=Play  T=TPO  \\=AI Chat  N=News  ?=Help"
+            "D=Data  S=Strategy  Space=Play  T=TPO  \\=AI Chat  N=News  K=Stock  ?=Help"
         )
 
         strat_panel = self.query_one("#strategy_panel", StrategyPanel)
@@ -310,6 +312,9 @@ class FuturesBacktestTUI(App):
     def action_open_news(self):
         self.push_screen(NewsScreen())
 
+    def action_open_stock(self):
+        self.push_screen(StockScreen())
+
     def action_open_data(self):
         self.push_screen(DataManager(default_dir=str(DEMO_DATA.parent)))
 
@@ -363,6 +368,14 @@ class FuturesBacktestTUI(App):
         self.query_one("#strategy_panel", StrategyPanel).set_strategy(name, {})
         self._reset_state()
         self.call_later(self._start_replay)
+
+    def on_send_to_ai_chat(self, msg: SendToAIChat):
+        """Receive stock context from StockScreen and inject into AI chat."""
+        panel = self.query_one("#ai_chat_panel", AIChatPanel)
+        panel.inject_stock_context(msg.ticker, msg.context)
+        if not panel.is_open:
+            panel.toggle()
+        self.pop_screen()
 
     def on_prop_profile_selected(self, msg: PropProfileSelected):
         self._prop_profile = msg.profile
