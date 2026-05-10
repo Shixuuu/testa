@@ -103,16 +103,16 @@ class MainMenu(Screen):
     """
 
     BINDINGS = [
-        Binding("j", "cursor_down", "↓", show=False),
-        Binding("k", "cursor_up",   "↑", show=False),
-        Binding("down",  "cursor_down", "↓", show=False),
-        Binding("up",    "cursor_up",   "↑", show=False),
-        Binding("enter", "select",      "Select", show=False),
-        Binding("1",     "pick_1",      "", show=False),
-        Binding("2",     "pick_2",      "", show=False),
-        Binding("3",     "pick_3",      "", show=False),
-        Binding("q",     "pick_q",      "", show=False),
-        Binding("escape","pick_q",      "", show=False),
+        Binding("j",      "cursor_down", "↓",      show=False),
+        Binding("k",      "cursor_up",   "↑",      show=False),
+        Binding("down",   "cursor_down", "↓",      show=False),
+        Binding("up",     "cursor_up",   "↑",      show=False),
+        Binding("enter",  "select",      "Select", show=False),
+        Binding("1",      "pick_1",      "",       show=False),
+        Binding("2",      "pick_2",      "",       show=False),
+        Binding("3",      "pick_3",      "",       show=False),
+        Binding("q",      "pick_q",      "",       show=False),
+        Binding("escape", "go_back",     "Back",   show=False, priority=True),
     ]
 
     def compose(self) -> ComposeResult:
@@ -159,6 +159,16 @@ class MainMenu(Screen):
     def action_pick_2(self) -> None: self._launch("2")
     def action_pick_3(self) -> None: self._launch("3")
     def action_pick_q(self) -> None: self._launch("q")
+
+    def action_go_back(self) -> None:
+        """Escape: return to running backtest if already started, else quit."""
+        # The app sets _replay_started before re-opening the menu.
+        # If the backtest is already running, dismiss without a result so
+        # the app's callback treats it as "just close the menu".
+        if getattr(self.app, "_replay_started", False):
+            self.dismiss("resume")
+        else:
+            self.dismiss("quit")
 
     def _launch(self, key: str) -> None:
         mapping = {"1": "backtest", "2": "stock", "3": "news", "q": "quit"}

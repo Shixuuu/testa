@@ -141,8 +141,8 @@ class NewsScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Static(
-            "  MARKET NEWS & ECONOMIC CALENDAR  "
-            "   [R]=Refresh  [ESC/N]=Close",
+            "  ← MARKET NEWS & ECONOMIC CALENDAR   "
+            " [ESC / N] Back   [R] Refresh",
             id="news_header",
         )
         with Horizontal(id="news_columns"):

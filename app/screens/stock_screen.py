@@ -58,19 +58,41 @@ _CSS = """
 StockScreen {
     background: #07101e;
     color: #c8d8e8;
+    layout: vertical;
 }
 #search_bar {
-    height: 3;
+    height: 5;
     background: #0a1628;
-    border-bottom: solid #1e3a5f;
-    padding: 0 2;
+    border-bottom: solid #ff8c00;
+    padding: 1 2;
     layout: horizontal;
 }
-#search_bar Input {
-    width: 24;
-    background: #070d18;
+#back_btn {
+    width: 10;
+    background: #0a1628;
     border: solid #1e3a5f;
+    color: #4a6b8a;
+    margin-right: 1;
+}
+#back_btn:hover {
+    color: #ff8c00;
+    border: solid #ff8c00;
+}
+#search_bar Input {
+    width: 28;
+    background: #070d18;
+    border: solid #4a6b8a;
     color: #e8e8e8;
+}
+#search_bar Input:focus {
+    border: solid #ff8c00;
+}
+#search_btn {
+    margin-left: 1;
+    min-width: 10;
+    background: #1e3a5f;
+    border: solid #ff8c00;
+    color: #ff8c00;
 }
 #ticker_label {
     width: auto;
@@ -85,6 +107,12 @@ StockScreen {
     text-style: bold;
     padding: 0 1;
     content-align: left middle;
+}
+#search_hint {
+    width: 1fr;
+    content-align: right middle;
+    color: #2a4a6a;
+    padding: 0 1;
 }
 TabbedContent {
     height: 1fr;
@@ -207,12 +235,12 @@ class StockScreen(Screen):
 
     CSS = _CSS
     BINDINGS = [
-        Binding("escape", "dismiss", "Close"),
-        Binding("ctrl+r", "refresh_data", "Refresh"),
-        Binding("equals", "zoom_in", "Zoom In"),
-        Binding("minus", "zoom_out", "Zoom Out"),
-        Binding("ctrl+home", "jump_start", "Start"),
-        Binding("ctrl+end", "jump_end", "End"),
+        Binding("escape", "go_back",      "← Back",    priority=True),
+        Binding("ctrl+r", "refresh_data", "Refresh",   priority=True),
+        Binding("equals", "zoom_in",      "Zoom In"),
+        Binding("minus",  "zoom_out",     "Zoom Out"),
+        Binding("ctrl+home", "jump_start", "⇤ Start"),
+        Binding("ctrl+end",  "jump_end",   "End ⇥"),
     ]
 
     def __init__(self, ticker: str = "", **kwargs):
@@ -235,14 +263,17 @@ class StockScreen(Screen):
     def compose(self) -> ComposeResult:
         # ── Search bar ──
         with Horizontal(id="search_bar"):
+            yield Button("← Back", id="back_btn")
             yield Input(
-                placeholder="Ticker (AAPL, TSLA…)",
+                placeholder="Enter ticker (AAPL, TSLA, SPY…)",
                 id="ticker_input",
                 value=self._ticker,
             )
-            yield Button("Search", id="search_btn", variant="primary")
+            yield Button("SEARCH", id="search_btn")
             yield Label("", id="ticker_label")
             yield Label("", id="price_label")
+            yield Label("[ESC] back  [Ctrl+R] refresh  [scroll] zoom  [drag] pan",
+                        id="search_hint")
 
         with TabbedContent(id="tabs"):
             # ── Overview ──
@@ -311,11 +342,14 @@ class StockScreen(Screen):
 
     # ── Input handling ─────────────────────────────────────────────────────────
 
+    def action_go_back(self) -> None:
+        self.dismiss()
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         bid = event.button.id or ""
         if bid == "search_btn":
             self._do_search()
-        elif bid == "close_btn":
+        elif bid in ("close_btn", "back_btn"):
             self.dismiss()
         elif bid == "send_ai_btn":
             self._send_to_ai()

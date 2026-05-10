@@ -319,11 +319,12 @@ class FuturesBacktestTUI(App):
 
     def _on_menu_choice(self, result: str | None) -> None:
         """Called when MainMenu is dismissed."""
-        result = result or "quit"
-        if result == "backtest":
+        result = result or "resume"
+        if result in ("backtest", "resume"):
             if not self._replay_started and DEMO_DATA.exists():
                 self._replay_started = True
                 self.call_later(self._start_replay)
+            # else: just fall back to the running backtest (menu already popped)
         elif result == "stock":
             self.push_screen(StockScreen())
         elif result == "news":
