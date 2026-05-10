@@ -46,6 +46,7 @@ class CandlestickChart(Widget):
     """
 
     bars_visible: reactive[int] = reactive(80)
+    view_offset: reactive[int] = reactive(0)    # bars from right end to skip; 0 = follow live
     show_volume: reactive[bool] = reactive(True)
     show_indicators: reactive[bool] = reactive(True)
     chart_mode: reactive[str] = reactive("candle")   # "candle" | "tpo"
@@ -58,6 +59,10 @@ class CandlestickChart(Widget):
         self._open_trades: list[TradeEvent] = []
         self._tpo_profiles: list[TPOProfile] = []
         self._tpo_dirty = False
+        self._dragging = False
+        self._drag_start_x = 0
+        self._drag_offset_start = 0
+        self._hover_col: int = -1
 
     # ------------------------------------------------------------------ #
     # Public API                                                           #
@@ -94,6 +99,46 @@ class CandlestickChart(Widget):
         self.refresh()
 
     # ------------------------------------------------------------------ #
+    # Mouse zoom / pan                                                     #
+    # ------------------------------------------------------------------ #
+
+    def on_mouse_scroll_up(self, event) -> None:
+        step = max(1, self.bars_visible // 8)
+        self.bars_visible = max(10, self.bars_visible - step)
+        event.stop()
+
+    def on_mouse_scroll_down(self, event) -> None:
+        step = max(1, self.bars_visible // 8)
+        self.bars_visible = min(max(len(self._bars), 10), self.bars_visible + step)
+        event.stop()
+
+    def on_mouse_down(self, event) -> None:
+        self._dragging = True
+        self._drag_start_x = event.x
+        self._drag_offset_start = self.view_offset
+        self.capture_mouse()
+
+    def on_mouse_move(self, event) -> None:
+        if self._dragging and self._bars:
+            width = max(self.size.width - 4, 10)
+            bar_w = max(1, min(3, width // max(self.bars_visible, 1)))
+            delta = int((self._drag_start_x - event.x) / max(bar_w, 1))
+            total = len(self._bars)
+            new_off = max(0, min(total - self.bars_visible, self._drag_offset_start + delta))
+            if new_off != self.view_offset:
+                self.view_offset = new_off
+        self._hover_col = event.x
+        self.refresh()
+
+    def on_mouse_up(self, event) -> None:
+        self._dragging = False
+        self.release_mouse()
+
+    def on_mouse_leave(self, event) -> None:
+        self._hover_col = -1
+        self.refresh()
+
+    # ------------------------------------------------------------------ #
     # Render dispatch                                                       #
     # ------------------------------------------------------------------ #
 
@@ -119,7 +164,14 @@ class CandlestickChart(Widget):
         width = max(self.size.width - 4, 10)
         height = max(self.size.height - 4, 5)
 
-        visible_bars = self._bars[-self.bars_visible:]
+        total = len(self._bars)
+        n_vis = min(self.bars_visible, total)
+        if self.view_offset > 0:
+            end_i = max(n_vis, total - self.view_offset)
+            start_i = max(0, end_i - n_vis)
+            visible_bars = self._bars[start_i:end_i]
+        else:
+            visible_bars = self._bars[-n_vis:]
         prices_all = [p for b in visible_bars for p in (b.high, b.low)]
         price_min = min(prices_all)
         price_max = max(prices_all)
@@ -219,6 +271,10 @@ class CandlestickChart(Widget):
         result.append(f" {mode_label} ", style=_HEADER_STYLE)
         if header_info:
             result.append(header_info, style="bold " + ("#00cc44" if last_bar and last_bar.close >= last_bar.open else "#ff3030"))
+        if self.view_offset > 0:
+            result.append(f"  ◀ {self.view_offset}b back  scroll=zoom  drag=pan", style="dim #4a6b8a")
+        else:
+            result.append(f"  scroll=zoom  drag=pan  {n_vis}/{total}b", style="dim #2a4a6a")
         result.append("\n")
         for i, row in enumerate(canvas):
             line = Text()

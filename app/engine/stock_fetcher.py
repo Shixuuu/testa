@@ -89,19 +89,33 @@ def get_polygon_api_key() -> str:
 
 # ── Stock history ──────────────────────────────────────────────────────────────
 
-async def fetch_stock_history(ticker: str, period: str = "3mo") -> list[StockBar]:
+async def fetch_stock_history(
+    ticker: str, period: str = "3mo", interval: str = "1d"
+) -> list[StockBar]:
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _sync_fetch_history, ticker, period)
+    return await loop.run_in_executor(None, _sync_fetch_history, ticker, period, interval)
 
 
-def _sync_fetch_history(ticker: str, period: str) -> list[StockBar]:
+def _sync_fetch_history(ticker: str, period: str, interval: str = "1d") -> list[StockBar]:
     try:
         import yfinance as yf  # type: ignore
-        df = yf.Ticker(ticker).history(period=period, interval="1d")
+        df = yf.Ticker(ticker).history(period=period, interval=interval)
+        is_intraday = interval not in ("1d", "5d", "1wk", "1mo", "3mo")
         bars = []
         for ts, row in df.iterrows():
+            if is_intraday:
+                # Show HH:MM for intraday; strip seconds/tz
+                try:
+                    ts_label = ts.strftime("%m-%d %H:%M")
+                except Exception:
+                    ts_label = str(ts)
+            else:
+                try:
+                    ts_label = str(ts.date())
+                except Exception:
+                    ts_label = str(ts)[:10]
             bars.append(StockBar(
-                timestamp=str(ts.date()),
+                timestamp=ts_label,
                 open=float(row["Open"]),
                 high=float(row["High"]),
                 low=float(row["Low"]),
