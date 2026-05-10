@@ -266,6 +266,19 @@ class BacktraderRunner:
         self._df: Optional[pd.DataFrame] = None
         self._strategy_cls: Optional[type] = None
 
+    @property
+    def base_timeframe_minutes(self) -> int:
+        """Detect the bar period from loaded data's timestamp differences."""
+        if self._df is None or len(self._df) < 2:
+            return 1440  # assume daily if not loaded
+        diffs = self._df["datetime"].diff().dropna()
+        if diffs.empty:
+            return 1440
+        # Use mode to handle market-open gaps (overnight, weekends)
+        most_common = diffs.mode().iloc[0]
+        minutes = max(1, int(most_common.total_seconds() / 60))
+        return minutes
+
     def load(self):
         """Load data and strategy (call before start)."""
         self._df = load_dataframe(self.data_path)

@@ -21,7 +21,7 @@ from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
-from textual.widgets import Static, Footer, Header
+from textual.widgets import Static, Footer, Header, Button, Label
 from textual.reactive import reactive
 
 from .engine.backtrader_runner import BacktraderRunner
@@ -49,6 +49,18 @@ from .screens.monte_carlo_view import MonteCarloView
 from .screens.analytics_report import AnalyticsReportScreen
 from .screens.news_screen import NewsScreen
 from .screens.stock_screen import StockScreen, SendToAIChat
+
+# Timeframe options available in the backtest chart selector.
+# Each entry is (bar_period_minutes, display_label).
+BACKTEST_TFS = [
+    (1,    "1m"),
+    (5,    "5m"),
+    (15,   "15m"),
+    (30,   "30m"),
+    (60,   "1h"),
+    (240,  "4h"),
+    (1440, "1D"),
+]
 
 FIRM_PROFILES_DIR = Path(__file__).parent.parent / "firm_profiles"
 DEMO_DATA = Path(__file__).parent.parent / "data" / "demo" / "es_demo_5m.csv"
@@ -90,6 +102,46 @@ Screen {
 #centre_col {
     width: 1fr;
     layout: vertical;
+}
+
+#chart_tf_bar {
+    height: 3;
+    background: #0a1628;
+    border-bottom: solid #1e3a5f;
+    padding: 0 1;
+}
+
+#chart_tf_bar Label {
+    color: #4a6b8a;
+    content-align: left middle;
+    padding: 0 1;
+    width: auto;
+}
+
+.btf-btn {
+    background: #070d18;
+    border: solid #1e3a5f;
+    color: #4a6b8a;
+    min-width: 5;
+    margin: 0 0;
+    height: 3;
+}
+
+.btf-btn:hover {
+    background: #0d2040;
+    color: #00bfff;
+}
+
+.btf-btn.-active {
+    border: solid #ff8c00;
+    color: #ff8c00;
+    text-style: bold;
+    background: #0a1e30;
+}
+
+.btf-btn.-unavailable {
+    color: #2a3a4a;
+    border: solid #1a2a3a;
 }
 
 #chart_panel {
@@ -204,6 +256,7 @@ class FuturesBacktestTUI(App):
         self._win_count: int = 0
         self._mc_result = None
         self._current_bar: BarEvent | None = None
+        self._active_btf_minutes: int = 0   # 0 = not yet detected
 
     # ------------------------------------------------------------------ #
     # Compose                                                              #
@@ -216,6 +269,11 @@ class FuturesBacktestTUI(App):
             yield PositionPanel(id="position_panel")
             yield PropRulesPanel(id="prop_rules_panel")
         with Container(id="centre_col"):
+            with Horizontal(id="chart_tf_bar"):
+                yield Label(" TF: ")
+                for tf_min, tf_lbl in BACKTEST_TFS:
+                    yield Button(tf_lbl, id=f"btf_{tf_min}", classes="btf-btn")
+                yield Label("  scroll=zoom  drag=pan", id="chart_tf_hint")
             yield CandlestickChart(id="chart_panel")
             yield TradeLog(id="trade_log_panel")
             yield StatsPanel(id="stats_panel")
@@ -347,6 +405,58 @@ class FuturesBacktestTUI(App):
 
     def action_show_help(self):
         self.push_screen(HotkeyHelp())
+
+    # ------------------------------------------------------------------ #
+    # Backtest chart timeframe selector                                    #
+    # ------------------------------------------------------------------ #
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        bid = event.button.id or ""
+        if bid.startswith("btf_"):
+            try:
+                minutes = int(bid[4:])
+            except ValueError:
+                return
+            self._set_backtest_tf(minutes)
+
+    def _set_backtest_tf(self, minutes: int) -> None:
+        """Switch the backtest chart's display timeframe."""
+        chart = self.query_one("#chart_panel", CandlestickChart)
+        chart.set_display_timeframe(minutes)
+        self._active_btf_minutes = chart._display_tf_minutes  # clamped value
+        self._refresh_tf_buttons()
+        label = {m: l for m, l in BACKTEST_TFS}.get(self._active_btf_minutes,
+                                                      f"{self._active_btf_minutes}m")
+        self.query_one("#status_bar", StatusBar).message = f"Chart TF: {label}"
+
+    def _configure_tf_buttons(self, base_minutes: int) -> None:
+        """Mark TF buttons as active/unavailable based on base TF of loaded data."""
+        self._active_btf_minutes = base_minutes
+        for tf_min, _ in BACKTEST_TFS:
+            try:
+                btn = self.query_one(f"#btf_{tf_min}", Button)
+                btn.remove_class("-active", "-unavailable")
+                if tf_min < base_minutes:
+                    btn.add_class("-unavailable")
+                    btn.disabled = True
+                else:
+                    btn.disabled = False
+                if tf_min == base_minutes:
+                    btn.add_class("-active")
+            except Exception:
+                pass
+
+    def _refresh_tf_buttons(self) -> None:
+        """Sync button highlight to current active TF."""
+        for tf_min, _ in BACKTEST_TFS:
+            try:
+                btn = self.query_one(f"#btf_{tf_min}", Button)
+                if tf_min == self._active_btf_minutes:
+                    btn.add_class("-active")
+                else:
+                    btn.remove_class("-active")
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------ #
     # Screen messages                                                      #
@@ -489,6 +599,12 @@ class FuturesBacktestTUI(App):
         except Exception as e:
             self.notify(f"Load error: {e}", severity="error")
             return
+
+        # Detect base TF and configure chart + TF selector buttons
+        base_tf = self._runner.base_timeframe_minutes
+        chart = self.query_one("#chart_panel", CandlestickChart)
+        chart.set_base_timeframe(base_tf)
+        self._configure_tf_buttons(base_tf)
 
         loop = asyncio.get_event_loop()
         self._controller = ReplayController(self._runner, loop)

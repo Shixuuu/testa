@@ -1,6 +1,10 @@
 """
 CandlestickChart — ASCII candlestick + TPO/Market Profile chart widget.
-Toggle between modes with `T`.
+
+Display-side timeframe aggregation: the widget receives raw bars from the
+backtest engine and resamples them on-the-fly for any larger TF (e.g. 5m→1h).
+No re-running of the backtest is needed; trade markers are remapped correctly.
+Toggle between candle/TPO modes with `T`.
 """
 from __future__ import annotations
 from textual.widget import Widget
@@ -22,18 +26,28 @@ EXIT_LOSS_COLOR = "#ff3030"
 SL_COLOR = "#cc2222"
 TP_COLOR = "#22aa44"
 CURRENT_BAR_COLOR = "#00bfff"
-POC_COLOR = "#ff8c00"      # Bloomberg orange
-VAH_VAL_COLOR = "#00bfff"  # Bloomberg cyan
-VA_FILL_COLOR = "#0d2a18"
-SINGLE_COLOR = "#334455"
+POC_COLOR = "#ff8c00"
+VAH_VAL_COLOR = "#00bfff"
 IB_COLOR = "#1e3a5f"
 _HEADER_STYLE = "bold black on #ff8c00"
+
+_TF_LABELS: dict[int, str] = {
+    1: "1m", 2: "2m", 3: "3m", 5: "5m", 10: "10m", 15: "15m",
+    30: "30m", 60: "1h", 120: "2h", 240: "4h", 480: "8h",
+    1440: "1D", 10080: "1W",
+}
 
 
 class CandlestickChart(Widget):
     """
     Renders ASCII candlestick or TPO Market Profile chart.
-    Press T to toggle between chart modes.
+
+    Key features:
+    - set_base_timeframe(minutes) — called after data loads, locks minimum TF
+    - set_display_timeframe(minutes) — aggregate bars for display (≥ base TF)
+    - Mouse scroll → zoom in/out; click+drag → pan left/right through history
+    - view_offset=0 follows the live bar; >0 pans into history
+    - Press T to toggle candle ↔ TPO mode
     """
 
     DEFAULT_CSS = """
@@ -46,10 +60,10 @@ class CandlestickChart(Widget):
     """
 
     bars_visible: reactive[int] = reactive(80)
-    view_offset: reactive[int] = reactive(0)    # bars from right end to skip; 0 = follow live
+    view_offset: reactive[int] = reactive(0)
     show_volume: reactive[bool] = reactive(True)
     show_indicators: reactive[bool] = reactive(True)
-    chart_mode: reactive[str] = reactive("candle")   # "candle" | "tpo"
+    chart_mode: reactive[str] = reactive("candle")
     tick_size: reactive[float] = reactive(0.25)
 
     def __init__(self, **kwargs):
@@ -59,21 +73,30 @@ class CandlestickChart(Widget):
         self._open_trades: list[TradeEvent] = []
         self._tpo_profiles: list[TPOProfile] = []
         self._tpo_dirty = False
+
+        # Timeframe state
+        self._base_tf_minutes: int = 1
+        self._display_tf_minutes: int = 1
+        self._display_bars_cache: list[BarEvent] | None = None
+        self._cache_dirty: bool = True
+
+        # Mouse state
         self._dragging = False
         self._drag_start_x = 0
         self._drag_offset_start = 0
         self._hover_col: int = -1
 
     # ------------------------------------------------------------------ #
-    # Public API                                                           #
+    # Public API — data                                                    #
     # ------------------------------------------------------------------ #
 
-    def push_bar(self, bar: BarEvent):
+    def push_bar(self, bar: BarEvent) -> None:
         self._bars.append(bar)
         self._tpo_dirty = True
+        self._cache_dirty = True
         self.refresh()
 
-    def push_trade(self, trade: TradeEvent):
+    def push_trade(self, trade: TradeEvent) -> None:
         if trade.is_open:
             self._open_trades.append(trade)
         else:
@@ -81,22 +104,79 @@ class CandlestickChart(Widget):
             self._trades.append(trade)
         self.refresh()
 
-    def clear(self):
+    def clear(self) -> None:
         self._bars.clear()
         self._trades.clear()
         self._open_trades.clear()
         self._tpo_profiles.clear()
+        self._display_bars_cache = None
         self._tpo_dirty = False
+        self._cache_dirty = True
         self.refresh()
 
-    def toggle_chart_mode(self):
+    def toggle_chart_mode(self) -> None:
         self.chart_mode = "tpo" if self.chart_mode == "candle" else "candle"
         self.refresh()
 
-    def set_tick_size(self, tick_size: float):
+    def set_tick_size(self, tick_size: float) -> None:
         self.tick_size = tick_size
         self._tpo_dirty = True
         self.refresh()
+
+    # ------------------------------------------------------------------ #
+    # Public API — timeframe                                               #
+    # ------------------------------------------------------------------ #
+
+    def set_base_timeframe(self, minutes: int) -> None:
+        """Called when new data is loaded to record the raw bar period."""
+        self._base_tf_minutes = max(1, minutes)
+        self._display_tf_minutes = max(1, minutes)
+        self._cache_dirty = True
+        self.view_offset = 0
+        self.refresh()
+
+    def set_display_timeframe(self, minutes: int) -> None:
+        """Aggregate displayed bars to a larger timeframe (must be ≥ base TF)."""
+        clamped = max(self._base_tf_minutes, minutes)
+        if clamped == self._display_tf_minutes:
+            return
+        self._display_tf_minutes = clamped
+        self._cache_dirty = True
+        self.view_offset = 0   # jump back to live view on TF change
+        self.refresh()
+
+    @property
+    def _tf_ratio(self) -> int:
+        """How many raw bars make one display bar."""
+        return max(1, self._display_tf_minutes // max(self._base_tf_minutes, 1))
+
+    def _get_display_bars(self) -> list[BarEvent]:
+        """Return bars aggregated to the current display TF, with a simple cache."""
+        if not self._cache_dirty and self._display_bars_cache is not None:
+            return self._display_bars_cache
+
+        ratio = self._tf_ratio
+        if ratio <= 1:
+            self._display_bars_cache = self._bars
+            self._cache_dirty = False
+            return self._bars
+
+        result: list[BarEvent] = []
+        bars = self._bars
+        for i in range(0, len(bars), ratio):
+            group = bars[i : i + ratio]
+            result.append(BarEvent(
+                bar_index=len(result),
+                timestamp=group[0].timestamp,
+                open=group[0].open,
+                high=max(b.high for b in group),
+                low=min(b.low for b in group),
+                close=group[-1].close,
+                volume=sum(b.volume for b in group),
+            ))
+        self._display_bars_cache = result
+        self._cache_dirty = False
+        return result
 
     # ------------------------------------------------------------------ #
     # Mouse zoom / pan                                                     #
@@ -109,7 +189,8 @@ class CandlestickChart(Widget):
 
     def on_mouse_scroll_down(self, event) -> None:
         step = max(1, self.bars_visible // 8)
-        self.bars_visible = min(max(len(self._bars), 10), self.bars_visible + step)
+        display_total = len(self._get_display_bars())
+        self.bars_visible = min(max(display_total, 10), self.bars_visible + step)
         event.stop()
 
     def on_mouse_down(self, event) -> None:
@@ -123,8 +204,8 @@ class CandlestickChart(Widget):
             width = max(self.size.width - 4, 10)
             bar_w = max(1, min(3, width // max(self.bars_visible, 1)))
             delta = int((self._drag_start_x - event.x) / max(bar_w, 1))
-            total = len(self._bars)
-            new_off = max(0, min(total - self.bars_visible, self._drag_offset_start + delta))
+            display_total = len(self._get_display_bars())
+            new_off = max(0, min(display_total - self.bars_visible, self._drag_offset_start + delta))
             if new_off != self.view_offset:
                 self.view_offset = new_off
         self._hover_col = event.x
@@ -164,14 +245,21 @@ class CandlestickChart(Widget):
         width = max(self.size.width - 4, 10)
         height = max(self.size.height - 4, 5)
 
-        total = len(self._bars)
+        # ── Visible window (on display/aggregated bars) ────────────────
+        all_display = self._get_display_bars()
+        total = len(all_display)
         n_vis = min(self.bars_visible, total)
+
         if self.view_offset > 0:
             end_i = max(n_vis, total - self.view_offset)
             start_i = max(0, end_i - n_vis)
-            visible_bars = self._bars[start_i:end_i]
+            visible_bars = all_display[start_i:end_i]
         else:
-            visible_bars = self._bars[-n_vis:]
+            visible_bars = all_display[-n_vis:]
+
+        if not visible_bars:
+            return Text()
+
         prices_all = [p for b in visible_bars for p in (b.high, b.low)]
         price_min = min(prices_all)
         price_max = max(prices_all)
@@ -180,13 +268,12 @@ class CandlestickChart(Widget):
         chart_height = height - 4 if self.show_volume else height - 1
         vol_height = 3 if self.show_volume else 0
         canvas: list[list[tuple[str, str]]] = [[(" ", "")] * width for _ in range(height)]
-
         bar_width = min(3, max(1, width // max(len(visible_bars), 1)))
 
         def p2r(p: float) -> int:
             return int((price_max - p) / price_range * (chart_height - 1))
 
-        # SL / TP lines
+        # ── SL / TP lines ─────────────────────────────────────────────
         for ot in self._open_trades:
             if ot.stop_loss:
                 row = p2r(ot.stop_loss)
@@ -199,16 +286,20 @@ class CandlestickChart(Widget):
                     for c in range(width):
                         canvas[row][c] = ("─", TP_COLOR)
 
+        # ── Trade markers — remap bar indices to display TF ───────────
+        ratio = self._tf_ratio
         entry_markers: dict[int, str] = {}
         exit_markers: dict[int, str] = {}
         entry_prices: dict[int, float] = {}
         exit_prices: dict[int, float] = {}
         for t in self._trades:
-            entry_markers[t.bar_index] = t.direction
-            entry_prices[t.bar_index] = t.entry_price
+            r_idx = t.bar_index // ratio
+            entry_markers[r_idx] = t.direction
+            entry_prices[r_idx] = t.entry_price
             if t.exit_price is not None:
-                exit_markers[t.bar_index + 1] = "PROFIT" if (t.pnl or 0) >= 0 else "LOSS"
-                exit_prices[t.bar_index + 1] = t.exit_price
+                e_idx = (t.bar_index + 1) // ratio
+                exit_markers[e_idx] = "PROFIT" if (t.pnl or 0) >= 0 else "LOSS"
+                exit_prices[e_idx] = t.exit_price
 
         volumes = [b.volume for b in visible_bars]
         max_vol = max(volumes) if any(v > 0 for v in volumes) else 1.0
@@ -217,16 +308,17 @@ class CandlestickChart(Widget):
             col = i * bar_width
             if col >= width:
                 break
-            is_current = i == len(visible_bars) - 1
+            is_current = (i == len(visible_bars) - 1) and self.view_offset == 0
             is_bull = bar.close >= bar.open
-            body_color = CURRENT_BAR_COLOR if is_current else (BULL_COLOR if is_bull else BEAR_COLOR)
+            body_color = (
+                CURRENT_BAR_COLOR if is_current else
+                (BULL_COLOR if is_bull else BEAR_COLOR)
+            )
 
             top_r = p2r(bar.high)
             bot_r = p2r(bar.low)
-            open_r = p2r(bar.open)
-            close_r = p2r(bar.close)
-            body_top = min(open_r, close_r)
-            body_bot = max(open_r, close_r)
+            body_top = min(p2r(bar.open), p2r(bar.close))
+            body_bot = max(p2r(bar.open), p2r(bar.close))
 
             for r in range(max(0, top_r), min(chart_height, bot_r + 1)):
                 if col < width:
@@ -237,7 +329,7 @@ class CandlestickChart(Widget):
                     if col + w < width:
                         canvas[r][col + w] = (body_char, body_color)
 
-            bidx = bar.bar_index
+            bidx = bar.bar_index  # display bar sequential index
             if bidx in entry_markers:
                 row = max(0, min(chart_height - 1, p2r(entry_prices.get(bidx, bar.close))))
                 marker = "▲" if entry_markers[bidx] == "LONG" else "▼"
@@ -257,25 +349,30 @@ class CandlestickChart(Widget):
                     if 0 <= row < height and col < width:
                         canvas[row][col] = ("▄", "dim " + body_color)
 
-        # Header row
-        mode_label = "CANDLE [T=TPO]"
+        # ── Header ────────────────────────────────────────────────────
+        tf_label = _TF_LABELS.get(self._display_tf_minutes, f"{self._display_tf_minutes}m")
         last_bar = visible_bars[-1] if visible_bars else None
-        header_info = ""
+        result = Text()
+        result.append(f" CANDLE  {tf_label}  [T=TPO] ", style=_HEADER_STYLE)
         if last_bar:
             bull = last_bar.close >= last_bar.open
-            dir_sym = "▲" if bull else "▼"
-            price_color = "#00cc44" if bull else "#ff3030"
-            header_info = f" {dir_sym} {last_bar.close:.2f}"
-
-        result = Text()
-        result.append(f" {mode_label} ", style=_HEADER_STYLE)
-        if header_info:
-            result.append(header_info, style="bold " + ("#00cc44" if last_bar and last_bar.close >= last_bar.open else "#ff3030"))
+            sym = "▲" if bull else "▼"
+            result.append(
+                f" {sym} {last_bar.close:.2f}",
+                style="bold " + (BULL_COLOR if bull else BEAR_COLOR),
+            )
         if self.view_offset > 0:
-            result.append(f"  ◀ {self.view_offset}b back  scroll=zoom  drag=pan", style="dim #4a6b8a")
+            result.append(
+                f"  ◀ -{self.view_offset}  scroll=zoom  drag=pan",
+                style="dim #4a6b8a",
+            )
         else:
-            result.append(f"  scroll=zoom  drag=pan  {n_vis}/{total}b", style="dim #2a4a6a")
+            result.append(
+                f"  {n_vis}/{total} bars  scroll=zoom  drag=pan",
+                style="dim #2a4a6a",
+            )
         result.append("\n")
+
         for i, row in enumerate(canvas):
             line = Text()
             for char, style in row:
@@ -286,7 +383,7 @@ class CandlestickChart(Widget):
         return result
 
     # ------------------------------------------------------------------ #
-    # TPO rendering                                                         #
+    # TPO rendering  (always uses raw bars)                               #
     # ------------------------------------------------------------------ #
 
     def _render_tpo(self) -> Text:
@@ -304,18 +401,13 @@ class CandlestickChart(Widget):
             txt.append("\n\n  No session data to display.", style="dim #6a8fb5")
             return txt
 
-        # Show the most recent session
         profile = self._tpo_profiles[-1]
         width = max(self.size.width - 6, 20)
         height = max(self.size.height - 4, 5)
-
         all_prices = sorted(profile.price_levels.keys(), reverse=True)
-
-        # Only show as many rows as will fit
         visible_prices = all_prices[:height - 2]
-
         max_letters = max(len(profile.price_levels.get(p, "")) for p in visible_prices) if visible_prices else 1
-        label_w = 10   # price label width
+        label_w = 10
         bar_w = max(1, width - label_w - 4)
 
         result = Text()
@@ -336,43 +428,32 @@ class CandlestickChart(Widget):
             is_ib_high = abs(price - profile.initial_balance_high) < self.tick_size * 0.5
             is_ib_low = abs(price - profile.initial_balance_low) < self.tick_size * 0.5
 
-            # Price label
             if is_poc:
-                price_style = f"bold {POC_COLOR}"
-                marker = "◆"
+                price_style, marker = f"bold {POC_COLOR}", "◆"
             elif is_vah or is_val:
-                price_style = f"bold {VAH_VAL_COLOR}"
-                marker = "─"
+                price_style, marker = f"bold {VAH_VAL_COLOR}", "─"
             elif is_ib_high or is_ib_low:
-                price_style = f"bold {IB_COLOR}"
-                marker = "·"
+                price_style, marker = f"bold {IB_COLOR}", "·"
             else:
-                price_style = "#4a6b8a"
-                marker = " "
+                price_style, marker = "#4a6b8a", " "
 
             result.append(f"{marker}{price:>8.2f} ", style=price_style)
 
-            # TPO bar
             bar_len = int(len(letters) / max(max_letters, 1) * bar_w)
             bar_len = max(1, bar_len) if letters else 0
 
             if is_poc:
-                bar_style = f"bold {POC_COLOR}"
-                fill_char = "█"
+                bar_style, fill_char = f"bold {POC_COLOR}", "█"
             elif in_va:
-                bar_style = "#00884a"
-                fill_char = "█"
+                bar_style, fill_char = "#00884a", "█"
             else:
-                bar_style = "#224433"
-                fill_char = "▒"
+                bar_style, fill_char = "#224433", "▒"
 
             if letters:
-                # Show actual letters up to bar_len, then block-fill
                 display = (letters[:bar_len] if len(letters) <= bar_len
                            else letters[:bar_len - 1] + "+")
                 result.append(display.ljust(bar_len, fill_char), style=bar_style)
 
-            # Annotations
             annotations = []
             if is_poc:
                 annotations.append(Text("←POC", style=f"bold {POC_COLOR}"))
@@ -384,13 +465,10 @@ class CandlestickChart(Widget):
                 annotations.append(Text("←IBH", style=f"{IB_COLOR}"))
             if is_ib_low:
                 annotations.append(Text("←IBL", style=f"{IB_COLOR}"))
-
             for ann in annotations:
                 result.append_text(ann)
-
             result.append("\n")
 
-        # Legend
         result.append(
             f"  Sessions: {len(self._tpo_profiles)}  "
             f"| TPOs: {profile.tpo_count}  "
@@ -399,5 +477,4 @@ class CandlestickChart(Widget):
             f"[T=CANDLE]",
             style="dim #4a6b8a",
         )
-
         return result
