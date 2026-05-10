@@ -49,6 +49,7 @@ from .screens.monte_carlo_view import MonteCarloView
 from .screens.analytics_report import AnalyticsReportScreen
 from .screens.news_screen import NewsScreen
 from .screens.stock_screen import StockScreen, SendToAIChat
+from .screens.main_menu import MainMenu
 
 # Timeframe options available in the backtest chart selector.
 # Each entry is (bar_period_minutes, display_label).
@@ -212,6 +213,7 @@ class FuturesBacktestTUI(App):
 
     BINDINGS = [
         Binding("space", "toggle_play", "Play/Pause", priority=True),
+        Binding("grave_accent", "main_menu", "Menu"),
         Binding("right", "step_forward", "Step →", priority=True),
         Binding("]", "step_forward", "Step →", priority=True),
         Binding("left", "step_backward", "Step ←", priority=True),
@@ -257,6 +259,7 @@ class FuturesBacktestTUI(App):
         self._mc_result = None
         self._current_bar: BarEvent | None = None
         self._active_btf_minutes: int = 0   # 0 = not yet detected
+        self._replay_started: bool = False
 
     # ------------------------------------------------------------------ #
     # Compose                                                              #
@@ -308,12 +311,28 @@ class FuturesBacktestTUI(App):
         strat_panel.set_strategy("SMA Crossover", {"fast": 10, "slow": 30}, ["SMA(10)", "SMA(30)"])
         strat_panel.set_data_info(Path(self._data_path).name, self._instrument)
 
-        if DEMO_DATA.exists():
-            self.call_later(self._start_replay)
+        self.push_screen(MainMenu(), callback=self._on_menu_choice)
 
     # ------------------------------------------------------------------ #
     # Actions                                                              #
     # ------------------------------------------------------------------ #
+
+    def _on_menu_choice(self, result: str | None) -> None:
+        """Called when MainMenu is dismissed."""
+        result = result or "quit"
+        if result == "backtest":
+            if not self._replay_started and DEMO_DATA.exists():
+                self._replay_started = True
+                self.call_later(self._start_replay)
+        elif result == "stock":
+            self.push_screen(StockScreen())
+        elif result == "news":
+            self.push_screen(NewsScreen())
+        elif result == "quit":
+            self.exit()
+
+    def action_main_menu(self) -> None:
+        self.push_screen(MainMenu(), callback=self._on_menu_choice)
 
     def action_toggle_play(self):
         if not self._controller:
@@ -469,6 +488,7 @@ class FuturesBacktestTUI(App):
         self.query_one("#strategy_panel", StrategyPanel).set_data_info(
             Path(self._data_path).name, self._instrument
         )
+        self._replay_started = True
         self._reset_state()
         self.call_later(self._start_replay)
 
@@ -476,6 +496,7 @@ class FuturesBacktestTUI(App):
         self._strategy_path = msg.path
         name = Path(msg.path).stem.replace("_", " ").title()
         self.query_one("#strategy_panel", StrategyPanel).set_strategy(name, {})
+        self._replay_started = True
         self._reset_state()
         self.call_later(self._start_replay)
 
